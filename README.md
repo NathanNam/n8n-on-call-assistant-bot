@@ -20,9 +20,12 @@ Here’s how the workflow looks in n8n:
 
 ## Short Video: The Problem It Solves
 
-Here’s a 8-second demo of the problem the **On-call Assistant Bot** addresses — helping engineers avoid noisy 2AM alerts and focus on real incidents:
+We created a short video that captures the problem the **On-call Assistant Bot** solves:  
+helping engineers avoid noisy 2AM alerts and focus on real incidents.
 
-▶️ [Watch the video](videos/Alex_is_an_on-call_engineer.mp4)
+▶️ [Watch on YouTube](https://youtu.be/6g7A-aDb280)
+
+[![On-call Assistant Bot Video](https://img.youtube.com/vi/6g7A-aDb280/0.jpg)](https://youtu.be/6g7A-aDb280)
 
 ---
 
