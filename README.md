@@ -18,6 +18,14 @@ Here’s how the workflow looks in n8n:
 
 ---
 
+## Short Video: The Problem It Solves
+
+Here’s a 8-second demo of the problem the **On-call Assistant Bot** addresses — helping engineers avoid noisy 2AM alerts and focus on real incidents:
+
+▶️ [Watch the video](videos/Alex_is_an_on-call_engineer.mp4)
+
+---
+
 ## Prereqs
 - **n8n** (Cloud or self-hosted)  
 - A **Slack App** (Bot) for your workspace  
@@ -60,14 +68,6 @@ Here’s how the workflow looks in n8n:
 
 ---
 
-## Customize
-- **Mute duration**: change `durSec` in *Build Mute Body* (default 3600s).  
-- **Links shown**: tweak the Slack message expressions.  
-- **Evidence gate**: require `(mcp:*)` signals for `signal` in the AI normalizer.  
-- **Dedup mutes**: add an n8n Data Store step keyed by `mute:<monitorID>`.  
-
----
-
 ## Examples
 
 ### Example 1 — **Signal Alert**
@@ -85,6 +85,14 @@ Frontend High Traffic Alert triggered.
 The bot triages it as **NOISE**, explains why, and automatically mutes the monitor.
 
 ![Noise Example](/images/noise.png)
+
+---
+
+## Customize
+- **Mute duration**: change `durSec` in *Build Mute Body* (default 3600s).  
+- **Links shown**: tweak the Slack message expressions.  
+- **Evidence gate**: require `(mcp:*)` signals for `signal` in the AI normalizer.  
+- **Dedup mutes**: add an n8n Data Store step keyed by `mute:<monitorID>`.  
 
 ---
 
