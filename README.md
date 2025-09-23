@@ -29,4 +29,69 @@ Here’s how the workflow looks in n8n:
 
 ### 1) Create Slack App & Bot
 1. Go to [Slack API Apps](https://api.slack.com/apps) → **Create New App** → From scratch.  
-2. **App name:** `On-call Assistant Bot` ; **Default username:** `on_call_assist
+2. **App name:** `On-call Assistant Bot` ; **Default username:** `on_call_assistant_bot`.  
+3. **Bot Scopes**:  
+   - `chat:write`, `channels:history`, `channels:read`, `app_mentions:read`  
+   - Optional: `users:read`; private chats: `groups:history`, `im:history`, `mpim:history`  
+4. **Install to Workspace** → copy Bot User OAuth Token (xoxb-…).  
+
+### 2) Event Subscriptions
+1. Enable **Event Subscriptions**.  
+2. **Request URL** = Slack Trigger node’s **Production URL**.  
+3. **Subscribe to bot events**: `message.channels`, `app_mention`.  
+4. **Save** → Reinstall if prompted.  
+5. `/invite @on_call_assistant_bot` to your channel.  
+
+### 3) Import & Configure
+- Import `On-call-Assistant-Bot-Flow.template.json` into n8n.  
+- Replace placeholders:
+  - `<SLACK_CHANNEL_ID>` (channel detail pane)  
+  - `<SLACK_BOT_USER_ID>` (from bot profile)  
+  - `<OBSERVE_CUSTOMERID>` (numeric subdomain)  
+- Attach credentials (do **not** hardcode tokens in the workflow):
+  - Slack OAuth (xoxb + Signing Secret)  
+  - HTTP Header Auth for MCP (`Authorization: Bearer <OBSERVE_CUSTOMERID> <TOKEN>`)  
+  - HTTP Bearer for mute POST  
+
+### 4) Activate & Test
+- **Activate** the workflow.  
+- Mention the bot in your channel or fire a test alert.  
+- You should see a threaded reply with verdict + links (and a :mute: confirmation when `noise`).  
+
+---
+
+## Customize
+- **Mute duration**: change `durSec` in *Build Mute Body* (default 3600s).  
+- **Links shown**: tweak the Slack message expressions.  
+- **Evidence gate**: require `(mcp:*)` signals for `signal` in the AI normalizer.  
+- **Dedup mutes**: add an n8n Data Store step keyed by `mute:<monitorID>`.  
+
+---
+
+## Examples
+
+### Example 1 — **Signal Alert**
+
+Payment Service Error Rate Alert triggered.  
+The bot triages it as **SIGNAL**, with severity **ERROR**, and provides context + next steps.
+
+![Signal Example](/images/signal.png)
+
+---
+
+### Example 2 — **Noise Alert**
+
+Frontend High Traffic Alert triggered.  
+The bot triages it as **NOISE**, explains why, and automatically mutes the monitor.
+
+![Noise Example](/images/noise.png)
+
+---
+
+## Security Notes
+- This template contains **no secrets**. Attach your own credentials in n8n.  
+- Keep your tenant/channel/user IDs out of version control; use placeholders.  
+
+---
+
+Happy on-call! :pager: :robot:
