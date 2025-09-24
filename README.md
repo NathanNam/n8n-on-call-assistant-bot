@@ -71,7 +71,7 @@ Replace the following placeholders in node parameters (don’t hardcode secrets)
 | `{{SLACK_CHANNEL_ID}}` | The channel ID where the bot listens/replies | `C0123ABCDEF` |
 | `{{SLACK_BOT_USER_ID}}` | Your bot user’s ID | `U0456GHIJKL` |
 | `{{OBSERVE_HOST}}` | Your Observe host | `https://123456789012.observeinc.com` |
-| `{{ANTHROPIC_MODEL}}` | Anthropic model alias/name used by your n8n cred | `claude-3-5-sonnet` |
+| `{{ANTHROPIC_MODEL}}` | Anthropic model alias/name used by your n8n cred | `claude-4-sonnet` |
 
 Attach credentials in **n8n → Credentials** and reference them from nodes:
 
