@@ -44,25 +44,70 @@ No more 2AM fire drills for non-issues. This bot helps on-call engineers focus o
 2. **App name:** `On-call Assistant Bot` ; **Default username:** `on_call_assistant_bot`  
 3. **OAuth Scopes (Bot Token):**
    - Required: `chat:write`, `channels:history`, `channels:read`, `app_mentions:read`
-   - Optional (if needed): `users:read`, and for private contexts `groups:history`, `im:history`, `mpim:history`
+   - Optional (if needed): `chat:write.public`, `users:read`, `groups:history`, `im:history`, `mpim:history`
 4. **Install to Workspace** → copy the **Bot User OAuth Token** (`xoxb-…`) and **Signing Secret**
 
 ### 2) Configure Event Subscriptions
 
 1. Enable **Event Subscriptions**  
 2. **Request URL** = the Slack Trigger node’s **Production URL** (shown in n8n after import)  
-3. **Subscribe to bot events:** `message.channels`, `app_mention`  
+   - Example: `https://{{N8N_HOST}}/webhook/<workflow-id>`  
+3. **Subscribe to bot events:**  
+   - `message.channels`  
+   - `app_mention`  
 4. Save and **Reinstall** if prompted  
 5. `/invite @on_call_assistant_bot` into your target channel
 
-### 3) Import the n8n Template
+---
+
+## Slack Bot Configuration (Reference)
+
+When configuring your Slack App, ensure:
+
+### Event Subscriptions
+
+Enable **Event Subscriptions** and set the **Request URL** to your n8n Slack Trigger node’s Production URL: https://{{N8N_HOST}}/webhook/<workflow-id>
+
+
+Subscribed bot events:
+- `message.channels`
+- `app_mention`
+
+![Slack Event Subscriptions Example](/images/slack-bot-event-subscriptions.png)
+
+---
+
+### OAuth Scopes
+
+Required Bot Token Scopes:
+- `app_mentions:read`
+- `channels:history`
+- `channels:read`
+- `chat:write`
+
+Optional (depending on your use case):
+- `chat:write.public`
+- `users:read`
+- `groups:history`
+- `im:history`
+- `mpim:history`
+
+![Slack Bot Scopes Example](/images/slack-bot-scopes.png)
+
+---
+
+> 💡 Tip: The screenshots above show a working configuration. Adjust scopes or events depending on whether you want the bot in private channels, group DMs, or just public channels.
+
+---
+
+## Import the n8n Template
 
 - In n8n Cloud, **Import** `On-call-Assistant-Bot-Flow.template.json`  
 - You should see something like:
 
 ![On-call Assistant Bot Flow in n8n Cloud](/images/n8n_cloud_screenshot.png)
 
-### 4) Set Placeholders & Credentials in n8n
+### Set Placeholders & Credentials in n8n
 
 Replace the following placeholders in node parameters (don’t hardcode secrets):
 
@@ -71,7 +116,7 @@ Replace the following placeholders in node parameters (don’t hardcode secrets)
 | `{{SLACK_CHANNEL_ID}}` | The channel ID where the bot listens/replies | `C0123ABCDEF` |
 | `{{SLACK_BOT_USER_ID}}` | Your bot user’s ID | `U0456GHIJKL` |
 | `{{OBSERVE_HOST}}` | Your Observe host | `https://123456789012.observeinc.com` |
-| `{{ANTHROPIC_MODEL}}` | Anthropic model alias/name used by your n8n cred | `claude-4-sonnet` |
+| `{{ANTHROPIC_MODEL}}` | Anthropic model alias/name used by your n8n cred | `claude-3-5-sonnet` |
 
 Attach credentials in **n8n → Credentials** and reference them from nodes:
 
@@ -81,7 +126,9 @@ Attach credentials in **n8n → Credentials** and reference them from nodes:
 
 > Tip: Use n8n **Environment Variables** or **Credentials**—avoid literals inside the workflow.
 
-### 5) Activate & Test
+---
+
+## Activate & Test
 
 - **Activate** the workflow  
 - Mention the bot in your channel or fire a test alert payload  
