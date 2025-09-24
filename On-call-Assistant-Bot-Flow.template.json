@@ -1,5 +1,5 @@
 {
-  "name": "On-call Assistant Bot Flow (Public Template)",
+  "name": "On-call Assistant Bot Flow",
   "nodes": [
     {
       "parameters": {
@@ -9,76 +9,133 @@
         ],
         "channelId": {
           "__rl": true,
-          "value": "<SLACK_CHANNEL_ID>",
+          "value": "{{SLACK_CHANNEL_ID}}",
           "mode": "id"
         },
         "options": {
           "userIds": [
-            "<SLACK_BOT_USER_ID>"
+            "{{SLACK_USER_ID}}"
           ]
         }
       },
       "type": "n8n-nodes-base.slackTrigger",
       "typeVersion": 1,
       "position": [
-        -940,
-        340
+        -944,
+        336
       ],
-      "name": "Slack Trigger"
+      "name": "Slack Trigger",
+      "alwaysOutputData": false
     },
     {
       "parameters": {
-        "jsCode": "\nconst ev = $json;\n\nconst topText =\n  ev?.text ||\n  ev?.blocks?.find(b => b.type === \"header\")?.text?.text ||\n  \"\";\n\nconst attachments = Array.isArray(ev.attachments) ? ev.attachments : [];\nconst first = attachments[0] || {};\nconst blocks = Array.isArray(first.blocks) ? first.blocks : [];\n\n// Title line\nconst titleBlock = blocks.find(\n  b => b.type === \"section\" && /triggered\\b/i.test(b.text?.text || \"\")\n);\nconst titleLine = titleBlock?.text?.text || \"\";\n\n// Description\nconst descBlock = blocks.find(\n  b => b.type === \"section\" && /description/i.test(b.text?.text || \"\")\n);\nconst description = (descBlock?.text?.text || \"\")\n  .replace(/^\\*?Description:\\*?\\s*/i, \"\")\n  .trim();\n\n// Buttons (links)\nlet viewAlertUrl = \"\";\nlet viewDataUrl = \"\";\nconst actions = blocks.find(b => b.type === \"actions\");\nif (actions?.elements) {\n  for (const el of actions.elements) {\n    if (el.type === \"button\") {\n      const label = (el.text?.text || \"\").toLowerCase();\n      if (label.includes(\"view alert\")) viewAlertUrl = el.url || viewAlertUrl;\n      if (label.includes(\"view data\"))  viewDataUrl  = el.url || viewDataUrl;\n    }\n  }\n}\n\n// Severity + Title\nconst severityMatch = topText.match(/^(warning|error|critical|info)/i);\nconst severity = (severityMatch?.[1] || \"warning\").toLowerCase();\n\nlet title = \"\";\nconst boldTitleMatch = titleLine.match(/\\*([^*]+)\\*/);\nif (boldTitleMatch) title = boldTitleMatch[1];\nif (!title) {\n  title = topText\n    .replace(/^(warning|error|critical|info):\\s*/i, \"\")\n    .replace(/\\s*triggered\\b.*$/i, \"\")\n    .trim();\n}\nif (!title) title = ev.text || \"Unknown Alert\";\n\n// Monitor / service heuristics\nlet monitor = title;\nlet service = \"\";\nconst serviceMatch = title.match(/^([A-Za-z0-9_\\- ]+?)\\s+(.+)$/);\nif (serviceMatch) {\n  service = (serviceMatch[1] || \"\").trim();\n  const rest = (serviceMatch[2] || \"\").trim();\n  if (/alert/i.test(rest)) monitor = rest;\n}\nservice = service ? service.toLowerCase() : \"\";\n\n// Dedup params\nfunction getParam(url, k) {\n  try { return new URL(url).searchParams.get(k) || \"\"; } catch { return \"\"; }\n}\nconst alarmId        = getParam(viewAlertUrl, \"alarmId\")     || getParam(viewDataUrl, \"alarmId\");\nconst monitorId      = getParam(viewAlertUrl, \"monitorId\")   || getParam(viewDataUrl, \"monitorId\");\nconst alertStartTime = getParam(viewAlertUrl, \"alertStartTime\") || getParam(viewDataUrl, \"alertStartTime\");\nconst dedup_key      = [alarmId, monitorId].filter(Boolean).join(\":\");\n\nconst alert = {\n  severity,\n  title,\n  monitor,\n  service,\n  channel: ev.channel,\n  ts: ev.ts,\n  description,\n  dedup_key,\n  alarmId, monitorId, alertStartTime,\n  window_min: 15\n};\n\nconst links = {\n  dashboard: \"\",\n  logs: \"\",\n  traces: \"\",\n  view_alert: viewAlertUrl,\n  view_data: viewDataUrl\n};\n\nreturn [{ json: { alert, links, raw: ev } }];\n"
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $json.alert.channel }}",
+          "mode": "id"
+        },
+        "text": "={{\n(() => {\n  const ai = $json.ai || {};\n  const verdict  = (ai.label || \"needs_more_context\").toUpperCase();\n  const severity = (ai.annotations?.severity || \"UNKNOWN\").toUpperCase();\n  const monitor  = ai.annotations?.monitor || \"N/A\";\n  const service  = ai.annotations?.service || \"N/A\";\n  const conf     = (ai.confidence != null) ? `  \u2022  *Conf:* ${(ai.confidence*100).toFixed(0)}%` : \"\";\n  const reason   = ai.reason ? (\"*Reason:* \" + ai.reason + \"\\n\") : \"\";\n\n  // links (conditionally render)\n  const L = ai.links || {};\n  const parts = [];\n  if (L.view_alert)  parts.push(`<${L.view_alert}|View Alert>`);\n  if (L.view_data)   parts.push(`<${L.view_data}|Alert Data>`);\n  if (L.traces)      parts.push(`<${L.traces}|Traces>`);\n  if (L.logs)        parts.push(`<${L.logs}|Logs>`);\n  if (L.dashboard)   parts.push(`<${L.dashboard}|Dashboard>`);\n  if (L.worksheet)   parts.push(`<${L.worksheet}|Worksheet>`); // <-- new link\n\n  const linksLine = parts.length ? parts.join(\"  |  \") + \"\\n\" : \"\";\n\n  // next steps (up to 3)\n  const steps = Array.isArray(ai.next_steps) && ai.next_steps.length\n    ? \"*Next steps:*\\n\" + ai.next_steps.slice(0,3).map((s,i)=>`${i+1}. ${s}`).join(\"\\n\") + \"\\n\"\n    : \"\";\n\n  const emoji = ai.label === \"signal\" ? \":red_circle:\"\n              : ai.label === \"noise\"  ? \":white_check_mark:\"\n              : \":grey_question:\";\n\n  return `${emoji} *On-call Assistant*\\n`\n       + `*Verdict:* ${verdict}  \u2022  *Severity:* ${severity}${conf}\\n`\n       + `*Monitor:* ${monitor}  \u2022  *Service:* \\`${service}\\`\\n`\n       + reason\n       + linksLine\n       + steps;\n})()\n}}\n",
+        "otherOptions": {
+          "thread_ts": {
+            "replyValues": {
+              "thread_ts": "={{ $json.alert.ts }}"
+            }
+          }
+        }
       },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
       "position": [
-        -620,
-        340
+        1248,
+        672
       ],
-      "name": "Normalize a Slack message"
+      "name": "Send a message",
+      "executeOnce": false,
+      "alwaysOutputData": false
     },
     {
       "parameters": {
         "promptType": "define",
         "text": "={{ $json }}",
         "options": {
-          "systemMessage": "# System Prompt: On-call Assistant with Observe MCP (Worksheet-Aware)\n\nYou are *On-call Assistant*, an SRE triage agent.\nYour job is to classify alerts as **noise** or **signal** and propose concise next steps for the on-caller.\nYou have access to the **Observe MCP server** and MUST use it to fetch context (logs, metrics, traces) and to produce an **investigation worksheet** URL for the on-caller.\n\n## Inputs\nYou will receive a single JSON object that has already been normalized into this schema:\n\n- `alert`: { severity, title, monitor, service, channel, ts, description, dedup_key, alarmId, monitorId, alertStartTime, window_min }\n- `links`: { dashboard, logs, traces, view_alert, view_data }\n- `raw`: the original Slack event payload (use only if needed)\n\nPrefer `alert.*` and `links.*`. Do **not** re-parse Slack blocks.\n\n## Required tool use (MCP)\n- When deciding, **call Observe MCP tools** to gather evidence (logs/metrics/traces) for the last **10\u201315 minutes around `alert.ts`**.\n- Also **request or generate an investigation worksheet** (put the URL in `links.worksheet`).\n- If tools are unavailable or return no data, output `needs_more_context` and propose lightweight next steps.\n\n## Output (strict JSON only)\nReturn only this JSON:\n{\n  \"label\": \"noise | signal | needs_more_context\",\n  \"confidence\": 0.0,\n  \"reason\": \"short one-sentence explanation\",\n  \"signals_seen\": [\"evidence with source tags\"],\n  \"noise_clues\": [\"evidence with source tags\"],\n  \"next_steps\": [\"up to 3 concrete steps\"],\n  \"suppress\": { \"mute_monitor\": false, \"duration_sec\": 0, \"dedup_key\": \"\", \"notes\": \"\" },\n  \"links\": { \"dashboard\": \"\", \"logs\": \"\", \"traces\": \"\", \"view_alert\": \"\", \"view_data\": \"\", \"worksheet\": \"\" },\n  \"annotations\": { \"service\": \"\", \"monitor\": \"\", \"severity\": \"\", \"window_min\": 10, \"metric_value\": null, \"threshold\": null }\n}\n\nConstraints:\n- URLs must come from input or MCP responses in this run (no fabrication).\n- Add source tags `(input)`, `(mcp:<tool>)`, or `(heuristic)` to evidence.\n- Return **only** JSON (no markdown fences/prose).\n"
+          "systemMessage": "=# System Prompt: On-call Assistant with Observe MCP (Worksheet-Aware)\n\nYou are *On-call Assistant*, an SRE triage agent.  \nYour job is to classify alerts as **noise** or **signal** and propose concise next steps for the on-caller.  \nYou have access to the **Observe MCP server** and MUST use it to fetch context (logs, metrics, traces) and to produce an **investigation worksheet** URL for the on-caller.\n\n---\n\n## Inputs\nYou will receive a single JSON object that has already been normalized into this schema:\n\n- `alert`: { severity, title, monitor, service, channel, ts, description, dedup_key, alarmId, monitorId, alertStartTime, window_min }\n- `links`: { dashboard, logs, traces, view_alert, view_data }  \u2190 may be empty or partial\n- `raw`: the original Slack event payload (use only if needed)\n\nPrefer `alert.*` and `links.*`. Do **not** re-parse Slack blocks.\n\n---\n\n## Required tool use (MCP)\n- When deciding, **call Observe MCP tools** to gather evidence (logs/metrics/traces) for the last **10\u201315 minutes around `alert.ts`**.\n- Also **request or generate an investigation worksheet** (e.g., via a tool that returns a worksheet URL suited for the on-caller to drill down).  \n- If tools are unavailable or return no data, default to `needs_more_context` and propose lightweight next steps.\n\n---\n\n## Policy\n\n### Classify **signal** if:\n- Error rate, latency, or traffic metrics cross thresholds and **persist >5\u201310 min**.\n- Description suggests user impact (e.g., service outage, payment failures, DNS issues).\n- Critical surface (checkout/payment/frontend) is implicated.\n- MCP queries corroborate the alert.\n\n### Classify **noise** if:\n- Known-flaky sources (`healthcheck`, `synthetic`, `cdn-probe`, `smoke`).\n- Self-resolves quickly (<5 min) or repeats with no user impact.\n- Off-peak low-traffic without downstream errors.\n- Input is test/demo or lacks actionable metrics.\n\n### Ambiguity rule:\nIf evidence is weak or missing, use `needs_more_context` and propose 2\u20133 small checks.\n\n---\n\n## Output (strict JSON only)\n\nReturn **only** this JSON object:\n\n```json\n{\n  \"label\": \"noise | signal | needs_more_context\",\n  \"confidence\": 0.0,\n  \"reason\": \"short one-sentence explanation\",\n  \"signals_seen\": [\"evidence with source tags\"],\n  \"noise_clues\": [\"evidence with source tags\"],\n  \"next_steps\": [\n    \"up to 3 concrete steps for the on-caller\"\n  ],\n  \"suppress\": {\n    \"mute_monitor\": false,\n    \"duration_sec\": 0,\n    \"dedup_key\": \"\",\n    \"notes\": \"\"\n  },\n  \"links\": {\n    \"dashboard\": \"\",\n    \"logs\": \"\",\n    \"traces\": \"\",\n    \"view_alert\": \"\",\n    \"view_data\": \"\",\n    \"worksheet\": \"\"\n  },\n  \"annotations\": {\n    \"service\": \"\",\n    \"monitor\": \"\",\n    \"severity\": \"\",\n    \"window_min\": 10,\n    \"metric_value\": null,\n    \"threshold\": null\n  }\n}"
         }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 2.2,
       "position": [
-        -130,
-        340
+        -128,
+        336
       ],
       "name": "AI Agent"
     },
     {
       "parameters": {
-        "endpointUrl": "https://<OBSERVE_CUSTOMERID>.observeinc.com/v1/ai/mcp",
+        "model": {
+          "__rl": true,
+          "value": "{{ANTHROPIC_MODEL}}",
+          "mode": "list",
+          "cachedResultName": "Anthropic Model (set in n8n)"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        -208,
+        512
+      ],
+      "name": "Anthropic Chat Model"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://{{OBSERVE_HOST}}/v1/ai/mcp",
         "serverTransport": "httpStreamable",
-        "authentication": "headerAuth"
+        "authentication": "headerAuth",
+        "options": {}
       },
       "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
       "typeVersion": 1.1,
       "position": [
-        110,
-        530
+        112,
+        528
       ],
       "name": "Observe MCP"
     },
     {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        512
+      ],
+      "name": "When clicking \u2018Execute workflow\u2019"
+    },
+    {
       "parameters": {
-        "jsCode": "\nfunction tryJSON(s){ try{ return JSON.parse(s); } catch{ return null; } }\nfunction extractJSON(str){\n  const s = String(str ?? \"\");\n  let m = s.match(/```json\\s*([\\s\\S]*?)\\s*```/i);\n  if (m) return tryJSON(m[1]);\n  m = s.match(/```([\\s\\S]*?)```/);\n  if (m) return tryJSON(m[1]);\n  const raw = tryJSON(s); if (raw) return raw;\n  const i = s.indexOf(\"{\"), j = s.lastIndexOf(\"}\");\n  if (i >= 0 && j > i) return tryJSON(s.slice(i, j+1));\n  return null;\n}\n\nlet ai = extractJSON($json.output);\n\nif (!ai || typeof ai !== \"object\") {\n  ai = { label: \"needs_more_context\", confidence: 0.2, reason: \"No parseable JSON from AI\", links: {}, annotations: {} };\n}\n\n// normalize\nconst allowed = new Set([\"noise\",\"signal\",\"needs_more_context\"]);\nai.label = allowed.has(String(ai.label||\"\").toLowerCase()) ? String(ai.label).toLowerCase() : \"needs_more_context\";\nai.confidence = Math.max(0, Math.min(1, Number(ai.confidence ?? 0)));\nai.noise_clues  = Array.isArray(ai.noise_clues)  ? ai.noise_clues  : (ai.noise_clues  ? [ai.noise_clues]  : []);\nai.signals_seen = Array.isArray(ai.signals_seen) ? ai.signals_seen : (ai.signals_seen ? [ai.signals_seen] : []);\nai.next_steps   = Array.isArray(ai.next_steps)   ? ai.next_steps   : (ai.next_steps   ? [ai.next_steps]   : []);\nai.next_steps   = ai.next_steps.slice(0, 3);\nai.annotations  = ai.annotations || {};\nai.links        = ai.links || {};\n\nfunction isObserveUrl(u) {\n  const v = String(u || \"\").trim();\n  if (!v) return false;\n  try {\n    const host = new URL(v).hostname;\n    return host === \"observeinc.com\" || host.endsWith(\".observeinc.com\");\n  } catch { return /^https?:\\/\\/[^/]*\\.?observeinc\\.com\\//i.test(v); }\n}\nfor (const k of [\"dashboard\",\"logs\",\"traces\",\"view_alert\",\"view_data\",\"worksheet\"]) {\n  const v = (ai.links[k] || \"\").trim();\n  ai.links[k] = isObserveUrl(v) ? v : (v ? \"\" : \"\");\n}\n\nreturn [{ json: { ai } }];\n"
+        "jsCode": "const ev = $json;\n\nconst topText =\n  ev?.text ||\n  ev?.blocks?.find(b => b.type === \"header\")?.text?.text ||\n  \"\";\n\nconst attachments = Array.isArray(ev.attachments) ? ev.attachments : [];\nconst first = attachments[0] || {};\nconst blocks = Array.isArray(first.blocks) ? first.blocks : [];\n\n// Title line\nconst titleBlock = blocks.find(\n  b => b.type === \"section\" && /triggered\\b/i.test(b.text?.text || \"\")\n);\nconst titleLine = titleBlock?.text?.text || \"\";\n\n// Description\nconst descBlock = blocks.find(\n  b => b.type === \"section\" && /description/i.test(b.text?.text || \"\")\n);\nconst description = (descBlock?.text?.text || \"\")\n  .replace(/^\\*?Description:\\*?\\s*/i, \"\")\n  .trim();\n\n// Buttons (links)\nlet viewAlertUrl = \"\";\nlet viewDataUrl = \"\";\nconst actions = blocks.find(b => b.type === \"actions\");\nif (actions?.elements) {\n  for (const el of actions.elements) {\n    if (el.type === \"button\") {\n      const label = (el.text?.text || \"\").toLowerCase();\n      if (label.includes(\"view alert\")) viewAlertUrl = el.url || viewAlertUrl;\n      if (label.includes(\"view data\"))  viewDataUrl  = el.url || viewDataUrl;\n    }\n  }\n}\n\n// Severity + Title\nconst severityMatch = topText.match(/^(warning|error|critical|info)/i);\nconst severity = (severityMatch?.[1] || \"warning\").toLowerCase();\n\nlet title = \"\";\nconst boldTitleMatch = titleLine.match(/\\*([^*]+)\\*/);\nif (boldTitleMatch) title = boldTitleMatch[1];\nif (!title) {\n  title = topText\n    .replace(/^(warning|error|critical|info):\\s*/i, \"\")\n    .replace(/\\s*triggered\\b.*$/i, \"\")\n    .trim();\n}\nif (!title) title = ev.text || \"Unknown Alert\";\n\n// Monitor / service heuristics\nlet monitor = title;\nlet service = \"\";\nconst serviceMatch = title.match(/^([A-Za-z0-9_\\- ]+?)\\s+(.+)$/);\nif (serviceMatch) {\n  service = (serviceMatch[1] || \"\").trim();\n  const rest = (serviceMatch[2] || \"\").trim();\n  if (/alert/i.test(rest)) monitor = rest;\n}\nservice = service ? service.toLowerCase() : \"\"; // don\u2019t lowercase \"\".\n\n// Dedup params\nfunction getParam(url, k) {\n  try { return new URL(url).searchParams.get(k) || \"\"; } catch { return \"\"; }\n}\nconst alarmId        = getParam(viewAlertUrl, \"alarmId\")     || getParam(viewDataUrl, \"alarmId\");\nconst monitorId      = getParam(viewAlertUrl, \"monitorId\")   || getParam(viewDataUrl, \"monitorId\");\nconst alertStartTime = getParam(viewAlertUrl, \"alertStartTime\") || getParam(viewDataUrl, \"alertStartTime\");\nconst dedup_key      = [alarmId, monitorId].filter(Boolean).join(\":\");\n\n// Build normalized object\nconst alert = {\n  severity,                    // \"warning\" | \"error\" | ...\n  title,                       // e.g., \"Frontend Low Traffic Alert\"\n  monitor,                     // e.g., \"Low Traffic Alert\"\n  service,                     // e.g., \"frontend\"\n  channel: ev.channel,\n  ts: ev.ts,\n  description,\n  dedup_key,\n  alarmId, monitorId, alertStartTime,\n  window_min: 15               // coarse window for downstream checks\n};\n\nconst links = {\n  dashboard: \"\",\n  logs: \"\",\n  traces: \"\",\n  view_alert: viewAlertUrl,\n  view_data: viewDataUrl\n};\n\nreturn [{ json: { alert, links, raw: ev } }];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        190,
-        340
+        -624,
+        336
       ],
-      "name": "Normalize the AI output"
+      "name": "Normalize a Slack message"
+    },
+    {
+      "parameters": {
+        "jsCode": "function tryJSON(s){ try{ return JSON.parse(s); } catch{ return null; } }\n\nfunction extractJSON(str){\n  const s = String(str ?? \"\");\n  let m = s.match(/```json\\s*([\\s\\S]*?)\\s*```/i);\n  if (m) return tryJSON(m[1]);\n  m = s.match(/```([\\s\\S]*?)```/);\n  if (m) return tryJSON(m[1]);\n  const raw = tryJSON(s); if (raw) return raw;\n  const i = s.indexOf(\"{\"), j = s.lastIndexOf(\"}\");\n  if (i >= 0 && j > i) return tryJSON(s.slice(i, j+1));\n  return null;\n}\n\nlet ai = extractJSON($json.output);\n\nif (!ai || typeof ai !== \"object\") {\n  ai = { label: \"needs_more_context\", confidence: 0.2, reason: \"No parseable JSON from AI\", links: {}, annotations: {} };\n}\n\n// --- normalize fields\nconst allowed = new Set([\"noise\",\"signal\",\"needs_more_context\"]);\nai.label = allowed.has(String(ai.label||\"\").toLowerCase()) ? String(ai.label).toLowerCase() : \"needs_more_context\";\nai.confidence   = Math.max(0, Math.min(1, Number(ai.confidence ?? 0)));\nai.noise_clues  = Array.isArray(ai.noise_clues)  ? ai.noise_clues  : (ai.noise_clues  ? [ai.noise_clues]  : []);\nai.signals_seen = Array.isArray(ai.signals_seen) ? ai.signals_seen : (ai.signals_seen ? [ai.signals_seen] : []);\nai.next_steps   = Array.isArray(ai.next_steps)   ? ai.next_steps   : (ai.next_steps   ? [ai.next_steps]   : []);\nai.next_steps   = ai.next_steps.slice(0, 3);\nai.annotations  = ai.annotations || {};\nai.links        = ai.links || {};\n\n// --- keep only valid Observe links (trim first; fallback regex)\nfunction isObserveUrl(u) {\n  const v = String(u || \"\").trim();\n  if (!v) return false;\n  try {\n    const host = new URL(v).hostname;\n    return host === \"observeinc.com\" || host.endsWith(\".observeinc.com\");\n  } catch {\n    // fallback if URL() fails (e.g., stray characters)\n    return /^https?:\\/\\/[^/]*\\.?observeinc\\.com\\//i.test(v);\n  }\n}\n\nconst KEYS = [\"dashboard\",\"logs\",\"traces\",\"view_alert\",\"view_data\",\"worksheet\"];\nfor (const k of KEYS) {\n  const v = (ai.links[k] || \"\").trim();\n  ai.links[k] = isObserveUrl(v) ? v : (v ? \"\" : \"\");\n}\n\n// (optional) debug if worksheet got dropped\n// if (!ai.links.worksheet && ($json.output || \"\").includes(\"worksheet\"))\n//   console.log(\"Worksheet present in model output but failed validation:\", ai.links.worksheet);\n\nreturn [{ json: { ai } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        336
+      ],
+      "name": "Normalize the AI Agent ouput"
     },
     {
       "parameters": {
@@ -96,84 +153,97 @@
             },
             {
               "name": "alert.alarmId",
-              "value": "={{ (($json.links?.view_alert || '').match(/[?&]alarmId=([^&]+)/)?.[1] || '').trim() }}",
+              "value": "={{ (($json.links?.view_alert || '').match(/[?&]alarmId={{ALARM_ID}}&]+)/)?.[1] || '').trim() }}",
               "type": "string"
             },
             {
               "name": "alert.monitorId",
-              "value": "={{ (($json.links?.view_alert || '').match(/[?&]monitorId=([^&]+)/)?.[1] || '').trim() }}",
+              "value": "={{ (($json.links?.view_alert || '').match(/[?&]monitorId={{MONITOR_ID}}&]+)/)?.[1] || '').trim() }}",
               "type": "string"
             }
           ]
-        }
+        },
+        "options": {}
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        -50,
-        700
+        -48,
+        704
       ],
       "name": "Edit Fields"
     },
     {
       "parameters": {
         "mode": "combine",
-        "combineBy": "combineByPosition"
+        "combineBy": "combineByPosition",
+        "options": {}
       },
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        540,
-        350
+        544,
+        352
       ],
       "name": "Merge"
     },
     {
       "parameters": {
         "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
           "conditions": [
             {
-              "leftValue": "={{ ($json.ai?.label || '').toLowerCase() }}",
+              "leftValue": "={{ ($json.ai?.label || \"\").toLowerCase()}}",
               "rightValue": "noise",
               "operator": {
                 "type": "string",
-                "operation": "equals"
+                "operation": "equals",
+                "name": "filter.operator.equals"
               }
             }
           ],
-          "options": {
-            "version": 2,
-            "caseSensitive": true,
-            "typeValidation": "strict"
-          }
-        }
+          "combinator": "and"
+        },
+        "options": {}
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        780,
-        350
+        784,
+        352
       ],
-      "name": "If noise?"
+      "name": "If"
     },
     {
       "parameters": {
-        "jsCode": "\nfunction clean(v){ return String(v == null ? \"\" : v).trim().replace(/^=/, \"\"); }\n\nconst monitorId = clean($json.alert?.monitorId);\nconst alarmId   = clean($json.alert?.alarmId);\nconst startMs   = Number(clean($json.alert?.alertStartTime)) || Date.now();\n\nconst durSec = Number($json.ai?.suppress?.duration_sec || 3600);\nconst start  = new Date(startMs);\nconst end    = new Date(start.getTime() + durSec * 1000);\n\nconst reason = ($json.ai?.reason || \"noise\").slice(0, 90);\n\nif (!monitorId) {\n  return [{\n    json: {\n      __skip_mute: true,\n      note: \"Cannot mute: missing monitorId\",\n      channel: $json.alert?.channel,\n      ts: $json.alert?.ts,\n      view_alert: $json.ai?.links?.view_alert || \"\",\n      original: $json\n    }\n  }];\n}\n\nconst body = {\n  name: `AI mute (noise) \u2013 ${($json.ai?.annotations?.service || \"\").trim()} \u2013 ${reason}`,\n  monitorID: monitorId,\n  schedule: {\n    type: \"OneTime\",\n    oneTime: { startTime: start.toISOString(), endTime: end.toISOString() }\n  },\n  criteria: { operator: \"And\" }\n};\n\nreturn [{\n  json: {\n    __skip_mute: false,\n    __mute_url: \"https://<OBSERVE_CUSTOMERID>.observeinc.com/v1/monitor-mute-rules\",\n    __mute_body: body,\n    __startISO: start.toISOString(),\n    __endISO:   end.toISOString(),\n    __durMin:   Math.round((end - start) / 60000),\n    __reason:   reason,\n    channel: $json.alert?.channel,\n    ts: $json.alert?.ts,\n    original: $json\n  }\n}];\n"
+        "jsCode": "function clean(v){ return String(v == null ? \"\" : v).trim().replace(/^=/, \"\"); }\n\nconst monitorId = clean($json.alert?.monitorId);\nconst alarmId   = clean($json.alert?.alarmId);\nconst startMs   = Number(clean($json.alert?.alertStartTime)) || Date.now();\n\n// duration: prefer AI suggestion, else 1h\nconst durSec = Number($json.ai?.suppress?.duration_sec || 3600);\nconst start  = new Date(startMs);\nconst end    = new Date(start.getTime() + durSec * 1000);\n\nconst reason = ($json.ai?.reason || \"noise\").slice(0, 90);  // keep names short\n\nif (!monitorId) {\n  // skip case \u2192 still include original input\n  return [{\n    json: {\n      __skip_mute: true,\n      note: \"Cannot mute: missing monitorId\",\n      channel: $json.alert?.channel,\n      ts: $json.alert?.ts,\n      view_alert: $json.ai?.links?.view_alert || \"\",\n      original: $json  // carry original input\n    }\n  }];\n}\n\n// build mute rule body\nconst body = {\n  name: `AI mute (noise) \u2013 ${($json.ai?.annotations?.service || \"\").trim()} \u2013 ${reason}`,\n  monitorID: monitorId,\n  schedule: {\n    type: \"OneTime\",\n    oneTime: {\n      startTime: start.toISOString(),\n      endTime:   end.toISOString()\n    }\n  },\n  criteria: { operator: \"And\" } // minimal valid criteria to mute entire monitor\n};\n\nreturn [{\n  json: {\n    __skip_mute: false,\n    __mute_url: \"https://{{OBSERVE_HOST}}/v1/monitor-mute-rules\",\n    __mute_body: body,\n    __startISO: start.toISOString(),\n    __endISO:   end.toISOString(),\n    __durMin:   Math.round((end - start) / 60000),\n    __reason:   reason,\n    channel: $json.alert?.channel,\n    ts: $json.alert?.ts,\n    original: $json  // carry original input even when we *do* mute\n  }\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         1040,
-        -10
+        -16
       ],
       "name": "Build Mute Body"
     },
     {
       "parameters": {
         "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
           "conditions": [
             {
               "leftValue": "={{ !$json.__skip_mute }}",
+              "rightValue": "true",
               "operator": {
                 "type": "boolean",
                 "operation": "true",
@@ -181,25 +251,24 @@
               }
             }
           ],
-          "options": {
-            "version": 2,
-            "caseSensitive": true,
-            "typeValidation": "strict"
-          }
-        }
+          "combinator": "and"
+        },
+        "options": {}
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1220,
-        -10
+        1216,
+        -16
       ],
-      "name": "IF \u2014 Guard: monitorId?"
+      "name": "IF \u2014 Guard: do we have a monitorId?"
     },
     {
       "parameters": {
         "method": "POST",
         "url": "={{ $json.__mute_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -211,26 +280,29 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ $json.__mute_body }}"
+        "jsonBody": "={{ $json.__mute_body }}",
+        "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1540,
-        100
+        1536,
+        96
       ],
-      "name": "Observe \u2013 Create Mute Rule"
+      "name": "Observe \u2013 Create Mute Rule",
+      "alwaysOutputData": true
     },
     {
       "parameters": {
         "mode": "combine",
-        "combineBy": "combineByPosition"
+        "combineBy": "combineByPosition",
+        "options": {}
       },
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
         1760,
-        -40
+        -48
       ],
       "name": "Merge1"
     },
@@ -242,7 +314,7 @@
           "value": "={{ $json.original.alert.channel }}",
           "mode": "id"
         },
-        "text": "={{\n(() => {\n  const ai = $json.original?.ai || $json.ai || {};\n  const verdict  = (ai.label || \"needs_more_context\").toUpperCase();\n  const severity = (ai.annotations?.severity || \"UNKNOWN\").toUpperCase();\n  const conf     = (ai.confidence != null) ? `  \u2022  Conf: ${(ai.confidence*100).toFixed(0)}%` : \"\";\n  const monitor  = ai.annotations?.monitor || \"N/A\";\n  const service  = ai.annotations?.service || \"N/A\";\n  const reason   = ai.reason ? `Reason: ${ai.reason}\\n` : \"\";\n\n  const muteLine = $json.id\n    ? `:mute: The monitor has been muted (mute rule id=${$json.id}) since it was classified as noise.\\n`\n    : \"\";\n\n  const L = ai.links || {};\n  const links = [];\n  if (L.view_alert) links.push(`<${L.view_alert}|View Alert>`);\n  if (L.view_data)  links.push(`<${L.view_data}|Alert Data>`);\n  if (L.logs)       links.push(`<${L.logs}|Logs>`);\n  if (L.worksheet)  links.push(`<${L.worksheet}|Worksheet>`);\n  const linksLine = links.length ? links.join(\"  |  \") + \"\\n\" : \"\";\n\n  const steps = Array.isArray(ai.next_steps) && ai.next_steps.length\n    ? \"Next steps:\\n\" + ai.next_steps.slice(0,3).map((s,i)=>`${i+1}. ${s}`).join(\"\\n\")\n    : \"\";\n\n  return `:white_check_mark: On-call Assistant\\n`\n       + `Verdict: ${verdict}  \u2022  Severity: ${severity}${conf}\\n`\n       + `Monitor: ${monitor}  \u2022  Service: ${service}\\n`\n       + reason\n       + muteLine\n       + linksLine\n       + steps;\n})()\n}}",
+        "text": "={{\n(() => {\n  const ai = $json.original?.ai || $json.ai || {};\n  const verdict  = (ai.label || \"needs_more_context\").toUpperCase();\n  const severity = (ai.annotations?.severity || \"UNKNOWN\").toUpperCase();\n  const conf     = (ai.confidence != null) ? `  \u2022  Conf: ${(ai.confidence*100).toFixed(0)}%` : \"\";\n  const monitor  = ai.annotations?.monitor || \"N/A\";\n  const service  = ai.annotations?.service || \"N/A\";\n  const reason   = ai.reason ? `Reason: ${ai.reason}\\n` : \"\";\n\n  // Mute line if rule id exists\n  const muteLine = $json.id\n    ? `:mute: The monitor has been muted (mute rule id=${$json.id}) since it was classified as noise.\\n`\n    : \"\";\n\n  // Links (conditionally)\n  const L = ai.links || {};\n  const links = [];\n  if (L.view_alert) links.push(`<${L.view_alert}|View Alert>`);\n  if (L.view_data)  links.push(`<${L.view_data}|Alert Data>`);\n  if (L.logs)       links.push(`<${L.logs}|Logs>`);\n  if (L.worksheet)  links.push(`<${L.worksheet}|Worksheet>`);\n  const linksLine = links.length ? links.join(\"  |  \") + \"\\n\" : \"\";\n\n  // Next steps\n  const steps = Array.isArray(ai.next_steps) && ai.next_steps.length\n    ? \"Next steps:\\n\" + ai.next_steps.slice(0,3).map((s,i)=>`${i+1}. ${s}`).join(\"\\n\")\n    : \"\";\n\n  return `:white_check_mark: On-call Assistant\\n`\n       + `Verdict: ${verdict}  \u2022  Severity: ${severity}${conf}\\n`\n       + `Monitor: ${monitor}  \u2022  Service: ${service}\\n`\n       + reason\n       + muteLine\n       + linksLine\n       + steps;\n})()\n}}\n",
         "otherOptions": {
           "thread_ts": {
             "replyValues": {
@@ -254,24 +326,31 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.3,
       "position": [
-        1980,
-        -40
+        1984,
+        -48
       ],
-      "name": "Send a message (monitor has been muted)"
+      "name": "Send a message (monitor has been muted)",
+      "executeOnce": false,
+      "alwaysOutputData": false
     },
     {
       "parameters": {
-        "select": "channel",
+        "select": "=channel",
         "channelId": {
           "__rl": true,
-          "value": "={{ $json.alert.channel }}",
+          "value": "={{ $json.original.alert.channel }}",
           "mode": "id"
         },
-        "text": "={{\n(() => {\n  const ai = $json.ai || {};\n  const verdict  = (ai.label || \"needs_more_context\").toUpperCase();\n  const severity = (ai.annotations?.severity || \"UNKNOWN\").toUpperCase();\n  const monitor  = ai.annotations?.monitor || \"N/A\";\n  const service  = ai.annotations?.service || \"N/A\";\n  const conf     = (ai.confidence != null) ? `  \u2022  *Conf:* ${(ai.confidence*100).toFixed(0)}%` : \"\";\n  const reason   = ai.reason ? (\"*Reason:* \" + ai.reason + \"\\n\") : \"\";\n\n  const L = ai.links || {};\n  const parts = [];\n  if (L.view_alert)  parts.push(`<${L.view_alert}|View Alert>`);\n  if (L.view_data)   parts.push(`<${L.view_data}|Alert Data>`);\n  if (L.traces)      parts.push(`<${L.traces}|Traces>`);\n  if (L.logs)        parts.push(`<${L.logs}|Logs>`);\n  if (L.dashboard)   parts.push(`<${L.dashboard}|Dashboard>`);\n  if (L.worksheet)   parts.push(`<${L.worksheet}|Worksheet>`);\n  const linksLine = parts.length ? parts.join(\"  |  \") + \"\\n\" : \"\";\n\n  const steps = Array.isArray(ai.next_steps) && ai.next_steps.length\n    ? \"*Next steps:*\\n\" + ai.next_steps.slice(0,3).map((s,i)=>`${i+1}. ${s}`).join(\"\\n\") + \"\\n\"\n    : \"\";\n\n  const emoji = ai.label === \"signal\" ? \":red_circle:\"\n              : ai.label === \"noise\"  ? \":white_check_mark:\"\n              : \":grey_question:\";\n\n  return `${emoji} *On-call Assistant*\\n`\n       + `*Verdict:* ${verdict}  \u2022  *Severity:* ${severity}${conf}\\n`\n       + `*Monitor:* ${monitor}  \u2022  *Service:* \\`${service}\\`\\n`\n       + reason\n       + linksLine\n       + steps;\n})()\n}}",
+        "user": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "text": "={{\n(() => {\n  const ai = $json.original?.ai || {};\n  const conf = (ai.confidence != null) ? `  \u2022  *Conf:* ${(ai.confidence*100).toFixed(0)}%` : \"\";\n  const reason = ai.reason ? `*Reason:* ${ai.reason}\\n` : \"\";\n  const steps = Array.isArray(ai.next_steps) && ai.next_steps.length\n    ? \"*Next steps:*\\n\" + ai.next_steps.slice(0,3).map((s,i)=>`${i+1}. ${s}`).join(\"\\n\") + \"\\n\"\n    : \"\";\n\n  // only include view_alert here, NOT worksheet\n  const va = ai.links?.view_alert ? `<${ai.links.view_alert}|View Alert>` : \"\";\n  const linkParts = [];\n  if (va) linkParts.push(va);\n  const linksLine = linkParts.length ? linkParts.join(\"  |  \") + \"\\n\" : \"\";\n\n  return \":warning: *On-call Assistant*\\n\"\n  + \"*Could not mute \u2014 missing monitorId*\\n\"\n    + `*Verdict:* ${(ai.label || \"needs_more_context\").toUpperCase()}${conf}\\n`\n    + `*Monitor:* ${ai.annotations?.monitor || \"N/A\"}  \u2022  *Service:* \\`${ai.annotations?.service || \"N/A\"}\\`\\n`\n    + reason\n    + linksLine\n    + steps;\n})()\n}}",
         "otherOptions": {
           "thread_ts": {
             "replyValues": {
-              "thread_ts": "={{ $json.alert.ts }}"
+              "thread_ts": "={{ $json.original.alert.ts }}"
             }
           }
         }
@@ -279,12 +358,99 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.3,
       "position": [
-        1248,
-        672
+        1552,
+        320
       ],
-      "name": "Send a message"
+      "name": "Send a message (test)",
+      "executeOnce": false,
+      "alwaysOutputData": false
     }
   ],
+  "pinData": {
+    "When clicking \u2018Execute workflow\u2019": [
+      {
+        "json": {
+          "subtype": "bot_message",
+          "text": "Warning: Frontend Low Traffic Alert triggered",
+          "username": "incoming-webhook",
+          "attachments": [
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "block_id": "XDRvj",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Frontend Low Traffic Alert* triggered at 3:26 PM, Sep 22",
+                    "verbatim": false
+                  }
+                },
+                {
+                  "type": "actions",
+                  "block_id": "Xpj/S",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "action_id": "USH48",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Alert",
+                        "emoji": true
+                      },
+                      "style": "primary",
+                      "url": "https://{{OBSERVE_HOST}}/workspace/41249703/alert?alarmId={{ALARM_ID}}&alertStartTime={{ALERT_START_TIME}}&monitorId={{MONITOR_ID}}"
+                    },
+                    {
+                      "type": "button",
+                      "action_id": "56nec",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Data",
+                        "emoji": true
+                      },
+                      "url": "https://{{OBSERVE_HOST}}/workspace/41249703/alert-data?alarmId={{ALARM_ID}}&alertStartTime={{ALERT_START_TIME}}&monitorId={{MONITOR_ID}}&monitorVersion={{MONITOR_VERSION}}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "block_id": "73vg4",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Description:*\nMonitors frontend request rate and alerts when traffic drops significantly below normal levels, which could indicate service outages, DNS issues, or other problems affecting user access",
+                    "verbatim": false
+                  }
+                }
+              ],
+              "color": "#FF8AD8",
+              "fallback": "[no preview available]"
+            }
+          ],
+          "type": "message",
+          "ts": "1758580345.893639",
+          "bot_id": "B09HBKE8BDW",
+          "blocks": [
+            {
+              "type": "header",
+              "block_id": "gbtUi",
+              "text": {
+                "type": "plain_text",
+                "text": "Warning: Frontend Low Traffic Alert triggered",
+                "emoji": true
+              }
+            },
+            {
+              "type": "divider",
+              "block_id": "PVTVn"
+            }
+          ],
+          "channel": "{{SLACK_ID}}",
+          "event_ts": "1758580345.893639",
+          "channel_type": "channel"
+        }
+      }
+    ]
+  },
   "connections": {
     "Slack Trigger": {
       "main": [
@@ -297,19 +463,12 @@
         ]
       ]
     },
-    "Normalize a Slack message": {
-      "main": [
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
         [
           {
             "node": "AI Agent",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Edit Fields",
-            "type": "main",
+            "type": "ai_languageModel",
             "index": 0
           }
         ]
@@ -319,14 +478,57 @@
       "main": [
         [
           {
-            "node": "Normalize the AI output",
+            "node": "Normalize the AI Agent ouput",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Normalize the AI output": {
+    "Observe MCP": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking \u2018Execute workflow\u2019": {
+      "main": [
+        [
+          {
+            "node": "Normalize a Slack message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        []
+      ]
+    },
+    "Normalize a Slack message": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize the AI Agent ouput": {
       "main": [
         [
           {
@@ -352,14 +554,14 @@
       "main": [
         [
           {
-            "node": "If noise?",
+            "node": "If",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "If noise?": {
+    "If": {
       "main": [
         [
           {
@@ -381,14 +583,14 @@
       "main": [
         [
           {
-            "node": "IF \u2014 Guard: monitorId?",
+            "node": "IF \u2014 Guard: do we have a monitorId?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "IF \u2014 Guard: monitorId?": {
+    "IF \u2014 Guard: do we have a monitorId?": {
       "main": [
         [
           {
@@ -432,15 +634,11 @@
           }
         ]
       ]
-    },
-    "Send a message": {
-      "main": [
-        []
-      ]
     }
   },
   "active": false,
   "settings": {
     "executionOrder": "v1"
-  }
+  },
+  "tags": []
 }
